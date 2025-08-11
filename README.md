@@ -80,19 +80,19 @@ The easiest way to run a program with an isolated memory allocator is to use the
 ### Example: Run Nemo with tcmalloc (child-safe)
 
 ```bash
-./libchildenv.sh tcmalloc nemo
+libchildenv.sh tcmalloc nemo
 ```
 
 ### Example: Run a program with jemalloc
 
 ```bash
-./libchildenv.sh jemalloc some_other_program
+libchildenv.sh jemalloc some_other_program
 ```
 
 ### Example: Run a program with mimalloc
 
 ```bash
-./libchildenv.sh mimalloc some_other_program
+libchildenv.sh mimalloc some_other_program
 ```
 
 ### Example: Verify loaded libraries in a process

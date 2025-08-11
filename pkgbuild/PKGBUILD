@@ -1,20 +1,31 @@
 # Maintainer: Bruno Goncalves <bigbruno@gmail.com>
+# Contributor: Leandro Guedes <leanguedes at icloud dot com>
 
 pkgname=libchildenv
 pkgver=1.0
 pkgrel=1
 arch=('x86_64')
-license=('GPL')
+license=('GPL-3.0-or-later')
 url="https://github.com/biglinux/libchildenv"
 pkgdesc="Modifying environment variables received by child processes"
-depends=('glibc')
-optdepends=('gperftools: tcmalloc support' 'mimalloc: mimalloc support' 'jemalloc: jemalloc support')
+depends=(
+    'bash'
+    'glibc'
+)
+makedepends=(
+    'gcc'
+    'git'
+)
+optdepends=(
+    'gperftools: tcmalloc support'
+    'jemalloc: jemalloc support'
+    'mimalloc: mimalloc support'
+)
 source=("git+https://github.com/biglinux/libchildenv.git")
 md5sums=('SKIP')
 
 build() {
-
-    cd "$srcdir/libchildenv"
+    cd "$srcdir/$pkgname"
     gcc -shared -fPIC -o libchildenv.so libchildenv.c -ldl
 }
 
@@ -22,4 +33,3 @@ package() {
     install -Dm755 $srcdir/libchildenv/libchildenv.so "${pkgdir}/usr/lib/libchildenv.so"
     install -Dm755 $srcdir/libchildenv/libchildenv.sh "${pkgdir}/usr/bin/libchildenv.sh"
 }
-

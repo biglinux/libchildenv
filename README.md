@@ -98,7 +98,7 @@ libchildenv.sh mimalloc some_other_program
 ### Example: Verify loaded libraries in a process
 
 ```bash
-./libchildenv.sh verify nemo
+libchildenv.sh verify nemo
 ```
 This prints the loaded allocator and childenv libraries for the newest `nemo` process, matching the verification style below.
 
@@ -114,7 +114,7 @@ This example demonstrates how `libchildenv` removes the `USER` environment varia
 
 2.  **In Terminal, start a bash shell with `libchildenv` loaded and the rule to add `MY_TEST` not to main process, only to child:**
     ```bash
-    CHILD_ENV_RULES="MY_TEST=biglinux" LD_PRELOAD=./libchildenv.so bash
+    CHILD_ENV_RULES="MY_TEST=biglinux" LD_PRELOAD=libchildenv.so bash
     ```
     *You are now in a new shell where `libchildenv` is active.*
 

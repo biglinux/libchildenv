@@ -8,6 +8,7 @@ license=('GPL')
 url="https://github.com/biglinux/libchildenv"
 pkgdesc="Modifying environment variables received by child processes"
 depends=('glibc')
+optdepends=('gperftools: tcmalloc support' 'mimalloc: mimalloc support' 'jemalloc: jemalloc support')
 source=("git+https://github.com/biglinux/libchildenv.git")
 md5sums=('SKIP')
 

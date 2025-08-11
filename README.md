@@ -73,7 +73,38 @@ Rules are specified in a single, comma-separated string.
 
 ---
 
-## Usage Examples
+## Quick Start: Using libchildenv.sh
+
+The easiest way to run a program with an isolated memory allocator is to use the provided `libchildenv.sh` script. This script sets up the correct environment for `libmimalloc`, `libjemalloc`, or `libtcmalloc` with `libchildenv` so that only the target program uses the allocator, and child processes do not inherit it.
+
+### Example: Run Nemo with tcmalloc (child-safe)
+
+```bash
+./libchildenv.sh tcmalloc nemo
+```
+
+### Example: Run a program with jemalloc
+
+```bash
+./libchildenv.sh jemalloc some_other_program
+```
+
+### Example: Run a program with mimalloc
+
+```bash
+./libchildenv.sh mimalloc some_other_program
+```
+
+### Example: Verify loaded libraries in a process
+
+```bash
+./libchildenv.sh verify nemo
+```
+This prints the loaded allocator and childenv libraries for the newest `nemo` process, matching the verification style below.
+
+---
+
+## Manual Usage Examples
 
 ### 1. Didactic Example: Removing a Variable
 

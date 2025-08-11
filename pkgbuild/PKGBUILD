@@ -1,0 +1,24 @@
+# Maintainer: Bruno Goncalves <bigbruno@gmail.com>
+
+pkgname=libchildenv
+pkgver=1.0
+pkgrel=1
+arch=('x86_64')
+license=('GPL')
+url="https://github.com/biglinux/libchildenv"
+pkgdesc="Modifying environment variables received by child processes"
+depends=('glibc')
+source=("git+https://github.com/biglinux/libchildenv.git")
+md5sums=('SKIP')
+
+build() {
+
+    cd "$srcdir/libchildenv"
+    gcc -shared -fPIC -o libchildenv.so libchildenv.c -ldl
+}
+
+package() {
+    install -Dm755 $srcdir/libchildenv/libchildenv.so "${pkgdir}/usr/lib/libchildenv.so"
+    install -Dm755 $srcdir/libchildenv/libchildenv.sh "${pkgdir}/usr/bin/libchildenv.sh"
+}
+

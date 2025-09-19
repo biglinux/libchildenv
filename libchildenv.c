@@ -7,12 +7,14 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <stdarg.h>
 
-// Pointer to the global environment variable, used by execvp.
+// Pointer to the global environment variable, used by execvp and family.
 extern char **environ;
 
-// Forward declaration
+// Forward declarations
 static void free_child_environment(char **mod_envp);
+static char **create_child_environment(char *const envp[]);
 
 /**
  * @brief Creates a new, controlled environment for a child process based on rules.
@@ -24,13 +26,6 @@ static void free_child_environment(char **mod_envp);
  * - To unset a variable: `VAR_NAME`
  * - To set/overwrite a variable: `VAR_NAME=new_value`
  *
- * DESIGN JUSTIFICATION (Memory Management):
- * To ensure correctness and simplify memory management, this function allocates a
- * completely self-contained environment. Every variable string, whether copied from
- * the original environment or newly created, is allocated on the heap. This avoids
- * the complexity and risks of mixing original and new pointers, making the cleanup
- * process trivial and safe.
- *
  * @param envp The original environment of the parent process.
  * @return A new, dynamically allocated, self-contained environment array on success.
  *         The caller is responsible for freeing this array and its contents using
@@ -39,8 +34,6 @@ static void free_child_environment(char **mod_envp);
 static char **create_child_environment(char *const envp[]) {
     char *rules_str_orig = getenv("CHILD_ENV_RULES");
     if (rules_str_orig == NULL || envp == NULL) {
-        // No rules, no-op. Return a copy of the original envp to maintain a
-        // consistent memory model where the result is always self-contained and freeable.
         int env_count = 0;
         for (char *const *e = envp; *e != NULL; ++e) env_count++;
 
@@ -50,7 +43,6 @@ static char **create_child_environment(char *const envp[]) {
         for (int i = 0; i < env_count; ++i) {
             envp_copy[i] = strdup(envp[i]);
             if (!envp_copy[i]) {
-                // On error, free everything allocated so far.
                 for (int j = 0; j < i; ++j) free(envp_copy[j]);
                 free(envp_copy);
                 return NULL;
@@ -63,8 +55,6 @@ static char **create_child_environment(char *const envp[]) {
     char *rules_str = strdup(rules_str_orig);
     if (!rules_str) return NULL;
 
-    // --- Begin Parsing Rules ---
-    // Count rules to allocate memory for them.
     int max_rules = 0;
     if (rules_str[0] != '\0') {
         max_rules = 1;
@@ -75,8 +65,8 @@ static char **create_child_environment(char *const envp[]) {
 
     typedef struct {
         char *name;
-        char *value; // NULL if the rule is to unset the variable.
-        bool applied;  // Flag to track if the rule was used.
+        char *value;
+        bool applied;
     } Rule;
 
     Rule *rules = calloc(max_rules, sizeof(Rule));
@@ -88,29 +78,25 @@ static char **create_child_environment(char *const envp[]) {
     int rule_count = 0;
     char *str_ptr = rules_str;
     char *rule_token;
-    // Use strsep instead of strtok for thread-safety.
     while ((rule_token = strsep(&str_ptr, ",")) != NULL && rule_count < max_rules) {
-        if (*rule_token == '\0') continue; // Skip empty tokens
+        if (*rule_token == '\0') continue;
 
         char *eq_ptr = strchr(rule_token, '=');
-        if (eq_ptr) { // Set/Overwrite rule
+        if (eq_ptr) {
             *eq_ptr = '\0';
             rules[rule_count].name = rule_token;
             rules[rule_count].value = eq_ptr + 1;
-        } else { // Unset rule
+        } else {
             rules[rule_count].name = rule_token;
             rules[rule_count].value = NULL;
         }
         rules[rule_count].applied = false;
         rule_count++;
     }
-    // --- End Parsing Rules ---
 
-    // Count original environment variables to allocate a sufficiently large new array.
     int env_count = 0;
     for (char *const *e = envp; *e != NULL; ++e) env_count++;
 
-    // The new environment can have at most `env_count` (from original) + `rule_count` (new vars) elements.
     char **new_envp = malloc(sizeof(char *) * (env_count + rule_count + 1));
     if (!new_envp) {
         free(rules_str);
@@ -121,8 +107,6 @@ static char **create_child_environment(char *const envp[]) {
     int new_env_idx = 0;
     bool success = true;
 
-    // --- Begin Building New Environment ---
-    // 1. Iterate the original environment, applying rules.
     for (char *const *e = envp; *e != NULL; ++e) {
         char *var = *e;
         char *eq_ptr = strchr(var, '=');
@@ -130,15 +114,13 @@ static char **create_child_environment(char *const envp[]) {
         bool var_is_ruled = false;
 
         for (int i = 0; i < rule_count; i++) {
-            // Check if the current variable `var` matches a rule's name.
             if (strncmp(var, rules[i].name, name_len) == 0 && rules[i].name[name_len] == '\0') {
                 var_is_ruled = true;
-                rules[i].applied = true; // Mark this rule as applied.
-                break; // A variable can only match one rule name.
+                rules[i].applied = true;
+                break;
             }
         }
 
-        // If the variable is not affected by any rule, copy it to the new environment.
         if (!var_is_ruled) {
             new_envp[new_env_idx] = strdup(var);
             if (!new_envp[new_env_idx]) {
@@ -149,12 +131,10 @@ static char **create_child_environment(char *const envp[]) {
         }
     }
 
-    // 2. Add all new variables ("set/overwrite" rules).
-    // An applied "set" rule is an overwrite. An unapplied "set" rule is a new addition.
     if (success) {
         for (int i = 0; i < rule_count; i++) {
-            if (rules[i].value) { // This is a "set/overwrite" rule.
-                size_t len = strlen(rules[i].name) + strlen(rules[i].value) + 2; // name=value\0
+            if (rules[i].value) {
+                size_t len = strlen(rules[i].name) + strlen(rules[i].value) + 2;
                 char *new_var = malloc(len);
                 if (!new_var) {
                     success = false;
@@ -165,96 +145,170 @@ static char **create_child_environment(char *const envp[]) {
             }
         }
     }
-    // --- End Building New Environment ---
 
     free(rules_str);
     free(rules);
 
     if (!success) {
-        // Cleanup on failure
-        for (int i = 0; i < new_env_idx; i++) {
-            free(new_envp[i]);
-        }
+        for (int i = 0; i < new_env_idx; i++) free(new_envp[i]);
         free(new_envp);
         return NULL;
     }
 
-    new_envp[new_env_idx] = NULL; // Terminate the new environment array.
-
+    new_envp[new_env_idx] = NULL;
     return new_envp;
 }
 
 /**
- * @brief Frees a self-contained environment array created by create_child_environment.
- *
- * @param mod_envp The environment array to free. If it's NULL, the function does nothing.
+ * @brief Frees a self-contained environment array.
  */
 static void free_child_environment(char **mod_envp) {
     if (mod_envp == NULL) return;
-
     for (char **e = mod_envp; *e != NULL; ++e) {
-        free(*e); // Free each variable string.
+        free(*e);
     }
-    free(mod_envp); // Free the array of pointers.
+    free(mod_envp);
 }
-
 
 // --- Wrappers for the exec function family ---
 
 int execve(const char *pathname, char *const argv[], char *const envp[]) {
     static int (*real_execve)(const char *, char *const *, char *const *) = NULL;
-    if (!real_execve) {
-        real_execve = dlsym(RTLD_NEXT, "execve");
-    }
+    if (!real_execve) real_execve = dlsym(RTLD_NEXT, "execve");
 
     char **new_envp = create_child_environment(envp);
     if (!new_envp) {
         errno = ENOMEM;
-        return -1; // Fail-closed: Cannot execute if env creation fails.
+        return -1;
     }
 
     int result = real_execve(pathname, argv, new_envp);
-    
-    // These lines only run if execve fails.
-    free_child_environment(new_envp);
+    free_child_environment(new_envp); // Only runs if execve fails
     return result;
 }
 
 int execvpe(const char *file, char *const argv[], char *const envp[]) {
     static int (*real_execvpe)(const char *, char *const *, char *const *) = NULL;
-    if (!real_execvpe) {
-        real_execvpe = dlsym(RTLD_NEXT, "execvpe");
-    }
+    if (!real_execvpe) real_execvpe = dlsym(RTLD_NEXT, "execvpe");
 
     char **new_envp = create_child_environment(envp);
     if (!new_envp) {
         errno = ENOMEM;
-        return -1; // Fail-closed
+        return -1;
     }
 
     int result = real_execvpe(file, argv, new_envp);
-
-    free_child_environment(new_envp);
+    free_child_environment(new_envp); // Only runs if execvpe fails
     return result;
 }
 
 int execvp(const char *file, char *const argv[]) {
-    static int (*real_execvpe)(const char *, char *const *, char *const *) = NULL;
-    if (!real_execvpe) {
-        // execvp can be implemented by calling execvpe with the global `environ`.
-        real_execvpe = dlsym(RTLD_NEXT, "execvpe");
-    }
+    static int (*real_execvp)(const char *, char *const *) = NULL;
+    if (!real_execvp) real_execvp = dlsym(RTLD_NEXT, "execvp");
 
-    // Use the global `environ` as the base, as per execvp's behavior.
     char **new_envp = create_child_environment(environ);
     if (!new_envp) {
         errno = ENOMEM;
-        return -1; // Fail-closed
+        return -1;
     }
     
-    // We can use execvpe to get the PATH search behavior of execvp.
-    int result = real_execvpe(file, argv, new_envp);
-    
+    char **original_environ = environ;
+    environ = new_envp;
+    int result = real_execvp(file, argv);
+    environ = original_environ; // Restore on failure
     free_child_environment(new_envp);
+    return result;
+}
+
+int execv(const char *path, char *const argv[]) {
+    static int (*real_execv)(const char *, char *const *) = NULL;
+    if (!real_execv) real_execv = dlsym(RTLD_NEXT, "execv");
+
+    char **new_envp = create_child_environment(environ);
+    if (!new_envp) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    char **original_environ = environ;
+    environ = new_envp;
+    int result = real_execv(path, argv);
+    environ = original_environ; // Restore on failure
+    free_child_environment(new_envp);
+    return result;
+}
+
+// --- Helper for variadic exec functions ---
+
+// Builds an argv array from variadic arguments. Caller must free the result.
+static char** build_argv_from_va_list(const char* arg0, va_list args) {
+    va_list args_counter;
+    va_copy(args_counter, args);
+    int argc = 1; // For arg0
+    while (va_arg(args_counter, char *) != NULL) {
+        argc++;
+    }
+    va_end(args_counter);
+
+    char **argv = malloc(sizeof(char*) * (argc + 1));
+    if (!argv) return NULL;
+
+    argv[0] = (char*)arg0;
+    for (int i = 1; i < argc; i++) {
+        argv[i] = va_arg(args, char*);
+    }
+    argv[argc] = NULL;
+
+    return argv;
+}
+
+int execl(const char *path, const char *arg, ...) {
+    va_list args;
+    va_start(args, arg);
+    char **argv = build_argv_from_va_list(arg, args);
+    va_end(args);
+
+    if (!argv) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    int result = execv(path, argv); // Calls our own wrapper
+    free(argv);
+    return result;
+}
+
+int execlp(const char *file, const char *arg, ...) {
+    va_list args;
+    va_start(args, arg);
+    char **argv = build_argv_from_va_list(arg, args);
+    va_end(args);
+
+    if (!argv) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    int result = execvp(file, argv); // Calls our own wrapper
+    free(argv);
+    return result;
+}
+
+int execle(const char *path, const char *arg, ...) {
+    va_list args;
+    va_start(args, arg);
+    char **argv = build_argv_from_va_list(arg, args);
+    
+    // After the argv NULL terminator, the next arg is envp
+    char *const *envp = va_arg(args, char *const *);
+    va_end(args);
+
+    if (!argv) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    int result = execve(path, argv, envp); // Calls our own wrapper
+    free(argv);
     return result;
 }

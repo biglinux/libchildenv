@@ -31,17 +31,17 @@ wrap_binary_with_malloc() {
 
 case "$option_selected" in
     mimalloc)
-        $apply_mimalloc exec "$@"
+        eval $apply_mimalloc exec "$@"
         exit
         ;;
 
     jemalloc)
-        $apply_jemalloc exec "$@"
+        eval $apply_jemalloc exec "$@"
         exit
         ;;
 
     tcmalloc)
-        $apply_tcmalloc  exec "$@"
+        eval $apply_tcmalloc  exec "$@"
         exit
         ;;
 

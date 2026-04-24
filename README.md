@@ -37,6 +37,18 @@ The source code only depends on `glibc` and `libdl`, requiring no other dependen
 gcc -shared -fPIC -o libchildenv.so libchildenv.c -ldl
 ```
 
+### Running the test suite
+
+```bash
+./tests/run_tests.sh
+```
+
+The suite rebuilds the library, compiles a small harness, and exercises
+every intercepted entry point (including `posix_spawn` and `fexecve`),
+edge cases (empty rules, malformed rules, values containing `=`,
+overwriting an existing variable), plus a grandchild-propagation check
+and a negative baseline that proves the harness actually detects leaks.
+
 ### System-Wide Installation
 
 To make the library globally available without needing to specify its full path, move it to a standard library directory.
@@ -129,7 +141,7 @@ This example demonstrates how `libchildenv` removes the `USER` environment varia
     bash
     ```
 
-5.  **In this new shell (the child process), check the `USER` variable:**
+5.  **In this new shell (the child process), check the `MY_TEST` variable:**
     ```bash
     echo $MY_TEST
     ```
@@ -138,7 +150,7 @@ This example demonstrates how `libchildenv` removes the `USER` environment varia
     biglinux
     ```
 
-The variable was successfully removed from the child's environment.
+The variable was successfully injected into the child's environment without existing in the parent.
 
 ### 2. Main Use Case: Isolating Memory Allocators
 
@@ -216,22 +228,26 @@ We can confirm that the `nemo` process from the previous example is using the li
 
 ### Intercepted Functions
 
-Currently, `libchildenv` intercepts the following `glibc` functions:
+`libchildenv` intercepts the full `exec*` family plus `posix_spawn` and
+`fexecve`, so modern runtimes that bypass `fork+exec` (Qt `QProcess`,
+GLib `g_spawn_async`, Python `subprocess`, Go `os/exec`) are also covered:
+
 *   `execve`
 *   `execvpe`
 *   `execvp`
+*   `execv`
+*   `execl`
+*   `execlp`
+*   `execle`
+*   `posix_spawn`
+*   `posix_spawnp`
+*   `fexecve`
 
 ### How it Works
 
 1.  **Loading:** The library is loaded into a target process before any other by setting `LD_PRELOAD=libchildenv.so`.
-2.  **Hooking:** `libchildenv` provides its own implementations of the `exec*` family functions (`execve`, `execvp`). When the target process tries to create a child, the `libchildenv` implementation runs first.
+2.  **Hooking:** `libchildenv` provides its own implementations of the `exec*` family functions. When the target process tries to create a child, the `libchildenv` implementation runs first.
 3.  **Resolving the Original Function:** Inside the hooked function, a pointer to the original `glibc` `exec*` function is obtained using `dlsym(RTLD_NEXT, "execve")`.
 4.  **Processing Rules:** The library reads and parses the content of the `CHILD_ENV_RULES` environment variable.
 5.  **Building the New Environment:** A new environment vector (`char*[]`) is allocated in memory. The library iterates over the parent's environment and applies the rules to build the new vector, unsetting or overwriting variables as specified.
 6.  **Execution:** The original `exec*` function is finally called, but with the new, modified environment vector. If the call fails, the allocated memory is freed to prevent memory leaks.
-### Intercepted Functions
-
-`libchildenv` currently intercepts the following `glibc` functions:
-*   `execve`
-*   `execvpe`
-*   `execvp`

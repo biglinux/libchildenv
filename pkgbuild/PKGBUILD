@@ -1,25 +1,33 @@
 # Maintainer: Bruno Goncalves <bigbruno@gmail.com>
 
 pkgname=libchildenv
-pkgver=1.1
+pkgver=1.2
 pkgrel=1
 arch=('x86_64')
 license=('GPL')
 url="https://github.com/biglinux/libchildenv"
 pkgdesc="Modifying environment variables received by child processes"
 depends=('glibc')
-optdepends=('gperftools: tcmalloc support' 'mimalloc: mimalloc support' 'jemalloc: jemalloc support')
+makedepends=('gcc')
+optdepends=('gperftools: tcmalloc support'
+            'mimalloc: mimalloc support'
+            'jemalloc: jemalloc support')
 source=("git+https://github.com/biglinux/libchildenv.git")
 md5sums=('SKIP')
 
 build() {
-
     cd "$srcdir/libchildenv"
-    gcc -shared -fPIC -o libchildenv.so libchildenv.c -ldl
+    gcc -shared -fPIC $CPPFLAGS $CFLAGS $LDFLAGS \
+        -o libchildenv.so libchildenv.c -ldl
 }
 
 package() {
-    install -Dm755 $srcdir/libchildenv/libchildenv.so "${pkgdir}/usr/lib/libchildenv.so"
-    install -Dm755 $srcdir/libchildenv/libchildenv.sh "${pkgdir}/usr/bin/libchildenv.sh"
+    install -Dm755 "$srcdir/libchildenv/libchildenv.so" \
+        "$pkgdir/usr/lib/libchildenv.so"
+    install -Dm755 "$srcdir/libchildenv/libchildenv.sh" \
+        "$pkgdir/usr/bin/libchildenv.sh"
+    install -Dm644 "$srcdir/libchildenv/LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$srcdir/libchildenv/README.md" \
+        "$pkgdir/usr/share/doc/$pkgname/README.md"
 }
-

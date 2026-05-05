@@ -1,95 +1,144 @@
 #!/bin/bash
-# Simple wrapper to run a command with libchildenv and a memory allocator
-# Usage: ./libchildenv.sh [mimalloc|jemalloc|tcmalloc] <command> [args...]
-#        ./libchildenv.sh verify <process_name>
-#        ./libchildenv.sh apply-malloc <binary> <allocator>
+# Wrapper to run a command with libchildenv and a memory allocator.
+# Usage: libchildenv.sh [mimalloc|jemalloc|tcmalloc] <command> [args...]
+#        libchildenv.sh verify <process_name>
+#        libchildenv.sh apply-malloc <binary> <mimalloc|jemalloc|tcmalloc>
+
+set -u
+
+usage() {
+    cat >&2 <<EOF
+Usage: $0 [mimalloc|jemalloc|tcmalloc] <command> [args...]
+       $0 verify <process_name>
+       $0 apply-malloc <binary> <mimalloc|jemalloc|tcmalloc>
+EOF
+}
+
+if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
+fi
 
 option_selected="$1"
 shift
 
-apply_mimalloc='LD_PRELOAD="libchildenv.so:libmimalloc.so" CHILD_ENV_RULES="LD_PRELOAD,MIMALLOC_PURGE_DELAY,CHILD_ENV_RULES" MIMALLOC_PURGE_DELAY=0'
-apply_jemalloc='LD_PRELOAD="libchildenv.so:libjemalloc.so" CHILD_ENV_RULES="LD_PRELOAD,MALLOC_CONF" MALLOC_CONF=narenas:1,CHILD_ENV_RULES'
-apply_tcmalloc='LD_PRELOAD="libchildenv.so:libtcmalloc.so" CHILD_ENV_RULES="LD_PRELOAD,TCMALLOC_AGGRESSIVE_DECOMMIT,CHILD_ENV_RULES" TCMALLOC_AGGRESSIVE_DECOMMIT=1'
+# Each allocator is represented as an array so env assignments survive
+# expansion without literal quote corruption (bash does not re-parse
+# assignment prefixes after variable expansion).
+mimalloc_env=(
+    "LD_PRELOAD=libchildenv.so:libmimalloc.so"
+    "CHILD_ENV_RULES=LD_PRELOAD,MIMALLOC_PURGE_DELAY,CHILD_ENV_RULES"
+    "MIMALLOC_PURGE_DELAY=0"
+)
+jemalloc_env=(
+    "LD_PRELOAD=libchildenv.so:libjemalloc.so"
+    "CHILD_ENV_RULES=LD_PRELOAD,MALLOC_CONF,CHILD_ENV_RULES"
+    "MALLOC_CONF=narenas:1"
+)
+tcmalloc_env=(
+    "LD_PRELOAD=libchildenv.so:libtcmalloc.so"
+    "CHILD_ENV_RULES=LD_PRELOAD,TCMALLOC_AGGRESSIVE_DECOMMIT,CHILD_ENV_RULES"
+    "TCMALLOC_AGGRESSIVE_DECOMMIT=1"
+)
+
+run_with_malloc() {
+    local -n env_arr=$1
+    shift
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit 1
+    fi
+    exec env "${env_arr[@]}" "$@"
+}
 
 wrap_binary_with_malloc() {
     local bin_path="$1"
-    local malloc_env="$2"
-    if [[ "$UID" != "0" ]]; then
-        echo "You need root permission"
+    local -n env_arr=$2
+
+    if [[ $EUID -ne 0 ]]; then
+        echo "You need root permission" >&2
         exit 1
     fi
-    if file -i "$bin_path" | grep -q charset=binary; then
-        cp -f "$bin_path" "$bin_path.orig"
-        echo -e "#!/bin/sh\n$malloc_env \"$bin_path.orig\" \"$@\"" > "$bin_path"
-        chmod +x "$bin_path"
-        echo "Now $bin_path uses custom malloc"
-    else
-        echo "$bin_path is a script, not applying again."
+    if [[ ! -e "$bin_path" ]]; then
+        echo "Binary not found: $bin_path" >&2
         exit 1
     fi
+    if ! file -b --mime "$bin_path" | grep -q 'charset=binary'; then
+        echo "$bin_path is not a binary (already wrapped or a script)." >&2
+        exit 1
+    fi
+    if [[ -e "$bin_path.orig" ]]; then
+        echo "$bin_path.orig already exists; refusing to overwrite." >&2
+        exit 1
+    fi
+
+    cp -f "$bin_path" "$bin_path.orig"
+
+    # Build env-assignment prefix (properly shell-quoted for embedding).
+    local env_line=""
+    local item
+    for item in "${env_arr[@]}"; do
+        env_line+="${item} "
+    done
+
+    cat > "$bin_path" <<EOF
+#!/bin/sh
+exec env ${env_line}"${bin_path}.orig" "\$@"
+EOF
+    chmod +x "$bin_path"
+    echo "Now $bin_path uses custom malloc"
 }
 
 case "$option_selected" in
     mimalloc)
-        eval $apply_mimalloc exec "$@"
-        exit
+        run_with_malloc mimalloc_env "$@"
         ;;
-
     jemalloc)
-        eval $apply_jemalloc exec "$@"
-        exit
+        run_with_malloc jemalloc_env "$@"
         ;;
-
     tcmalloc)
-        eval $apply_tcmalloc  exec "$@"
-        exit
+        run_with_malloc tcmalloc_env "$@"
         ;;
 
     verify)
-        if [ $# -ne 1 ]; then
-            echo "Usage: $0 verify <process_name>"
-            exit
-        fi
-        PROC="$1"
-        PID=$(pgrep -fn "$PROC")
-        if [ -z "$PID" ]; then
-            echo "No process named '$PROC' found."
+        if [[ $# -ne 1 ]]; then
+            echo "Usage: $0 verify <process_name>" >&2
             exit 1
         fi
-        lsof -p "$PID" 2>/dev/null | grep -E 'childenv|mimalloc|jemalloc|tcmalloc'
-        exit
+        proc_name="$1"
+        pid=$(pgrep -fn -- "$proc_name" || true)
+        if [[ -z "$pid" ]]; then
+            echo "No process named '$proc_name' found." >&2
+            exit 1
+        fi
+        lsof -p "$pid" 2>/dev/null | grep -E 'childenv|mimalloc|jemalloc|tcmalloc'
         ;;
 
     apply-malloc)
-        if [ $# -ne 2 ]; then
-            echo "Usage: $0 apply-malloc <binary> <mimalloc|jemalloc|tcmalloc>"
+        if [[ $# -ne 2 ]]; then
+            echo "Usage: $0 apply-malloc <binary> <mimalloc|jemalloc|tcmalloc>" >&2
             exit 1
         fi
-        BIN="$1"
-        MALLOC="$2"
-        case "$MALLOC" in
-            mimalloc)
-                wrap_binary_with_malloc "$BIN" "$apply_mimalloc"
-                ;;
-            jemalloc)
-                wrap_binary_with_malloc "$BIN" "$apply_jemalloc"
-                ;;
-            tcmalloc)
-                wrap_binary_with_malloc "$BIN" "$apply_tcmalloc"
-                ;;
+        bin="$1"
+        malloc="$2"
+        case "$malloc" in
+            mimalloc) wrap_binary_with_malloc "$bin" mimalloc_env ;;
+            jemalloc) wrap_binary_with_malloc "$bin" jemalloc_env ;;
+            tcmalloc) wrap_binary_with_malloc "$bin" tcmalloc_env ;;
             *)
-                echo "Unknown allocator: $MALLOC"
+                echo "Unknown allocator: $malloc" >&2
                 exit 1
                 ;;
         esac
         ;;
 
+    -h|--help|help)
+        usage
+        ;;
+
     *)
-        echo "Unknown allocator: $option_selected"
-        echo "Usage: $0 [mimalloc|jemalloc|tcmalloc] <command> [args...]"
-        echo "       $0 verify <process_name>"
-        echo "       $0 apply-malloc <binary> <mimalloc|jemalloc|tcmalloc>"
+        echo "Unknown option: $option_selected" >&2
+        usage
+        exit 1
         ;;
 esac
-
-

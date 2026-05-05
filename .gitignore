@@ -1,0 +1,3 @@
+*.so
+*.o
+tests/test_exec

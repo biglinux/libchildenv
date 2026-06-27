@@ -7,10 +7,24 @@ on:
     branches: [ "*" ]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      - name: Compile with warnings as errors
+        shell: bash
+        run: |
+          gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
+            -o libchildenv.so libchildenv.c -ldl
+      - name: Run test suite
+        shell: bash
+        run: ./tests/run_tests.sh
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - name: Send Hooks BigLinux Build Package
         shell: bash
         run: |

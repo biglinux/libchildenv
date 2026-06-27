@@ -228,9 +228,9 @@ We can confirm that the `nemo` process from the previous example is using the li
 
 ### Intercepted Functions
 
-`libchildenv` intercepts the full `exec*` family plus `posix_spawn` and
-`fexecve`, so modern runtimes that bypass `fork+exec` (Qt `QProcess`,
-GLib `g_spawn_async`, Python `subprocess`, Go `os/exec`) are also covered:
+`libchildenv` intercepts the full libc `exec*` family plus `posix_spawn` and
+`fexecve`, so libc-based runtimes that bypass `fork+exec` (Qt `QProcess`,
+GLib `g_spawn_async`, Python `subprocess`) are also covered:
 
 *   `execve`
 *   `execvpe`
@@ -242,6 +242,11 @@ GLib `g_spawn_async`, Python `subprocess`, Go `os/exec`) are also covered:
 *   `posix_spawn`
 *   `posix_spawnp`
 *   `fexecve`
+
+> **Limitation:** only spawners that go through these libc symbols are hooked.
+> Runtimes that issue the `execve`/`execveat` syscall directly — Go `os/exec`,
+> statically linked musl binaries — bypass the `LD_PRELOAD` interposition and
+> are **not** intercepted.
 
 ### How it Works
 

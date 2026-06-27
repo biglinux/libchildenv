@@ -3,8 +3,8 @@
 pkgname=libchildenv
 pkgver=1.3
 pkgrel=1
-arch=('x86_64')
-license=('GPL')
+arch=('x86_64' 'aarch64')
+license=('GPL3')
 url="https://github.com/biglinux/libchildenv"
 pkgdesc="Modifying environment variables received by child processes"
 depends=('glibc')
@@ -19,6 +19,11 @@ build() {
     cd "$srcdir/libchildenv"
     gcc -shared -fPIC $CPPFLAGS $CFLAGS $LDFLAGS \
         -o libchildenv.so libchildenv.c -ldl
+}
+
+check() {
+    cd "$srcdir/libchildenv"
+    ./tests/run_tests.sh
 }
 
 package() {

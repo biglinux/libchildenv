@@ -11,6 +11,7 @@ usage() {
 Usage: $0 [mimalloc|jemalloc|tcmalloc] <command> [args...]
        $0 verify <process_name>
        $0 apply-malloc <binary> <mimalloc|jemalloc|tcmalloc>
+       $0 unwrap <binary>
 EOF
 }
 
@@ -24,17 +25,22 @@ shift
 
 # Each allocator is represented as an array so env assignments survive
 # expansion without literal quote corruption (bash does not re-parse
-# assignment prefixes after variable expansion).
+# assignment prefixes after variable expansion). Each array is consumed by
+# name via `local -n` in run_with_malloc/wrap_binary_with_malloc, which the
+# linter cannot trace — hence the SC2034 suppressions below.
+# shellcheck disable=SC2034
 mimalloc_env=(
     "LD_PRELOAD=libchildenv.so:libmimalloc.so"
     "CHILD_ENV_RULES=LD_PRELOAD,MIMALLOC_PURGE_DELAY,CHILD_ENV_RULES"
     "MIMALLOC_PURGE_DELAY=0"
 )
+# shellcheck disable=SC2034
 jemalloc_env=(
     "LD_PRELOAD=libchildenv.so:libjemalloc.so"
     "CHILD_ENV_RULES=LD_PRELOAD,MALLOC_CONF,CHILD_ENV_RULES"
     "MALLOC_CONF=narenas:1"
 )
+# shellcheck disable=SC2034
 tcmalloc_env=(
     "LD_PRELOAD=libchildenv.so:libtcmalloc.so"
     "CHILD_ENV_RULES=LD_PRELOAD,TCMALLOC_AGGRESSIVE_DECOMMIT,CHILD_ENV_RULES"
@@ -74,7 +80,8 @@ wrap_binary_with_malloc() {
 
     cp -f "$bin_path" "$bin_path.orig"
 
-    # Build env-assignment prefix (properly shell-quoted for embedding).
+    # Build env-assignment prefix. Values are fixed allocator settings with no
+    # shell metacharacters, so they embed directly without extra quoting.
     local env_line=""
     local item
     for item in "${env_arr[@]}"; do
@@ -87,6 +94,24 @@ exec env ${env_line}"${bin_path}.orig" "\$@"
 EOF
     chmod +x "$bin_path"
     echo "Now $bin_path uses custom malloc"
+    echo "Note: a package update overwriting $bin_path removes this wrapper;" \
+         "re-run apply-malloc after upgrades. Undo with: $0 unwrap $bin_path" >&2
+}
+
+restore_wrapped_binary() {
+    local bin_path="$1"
+
+    if [[ $EUID -ne 0 ]]; then
+        echo "You need root permission" >&2
+        exit 1
+    fi
+    if [[ ! -e "$bin_path.orig" ]]; then
+        echo "No wrapped original found: $bin_path.orig" >&2
+        exit 1
+    fi
+
+    mv -f "$bin_path.orig" "$bin_path"
+    echo "Restored original $bin_path"
 }
 
 case "$option_selected" in
@@ -130,6 +155,14 @@ case "$option_selected" in
                 exit 1
                 ;;
         esac
+        ;;
+
+    unwrap)
+        if [[ $# -ne 1 ]]; then
+            echo "Usage: $0 unwrap <binary>" >&2
+            exit 1
+        fi
+        restore_wrapped_binary "$1"
         ;;
 
     -h|--help|help)

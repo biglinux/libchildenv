@@ -9,14 +9,13 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$REPO_DIR"
+cd "$REPO_DIR" || exit 2
 
 SO="$REPO_DIR/libchildenv.so"
 BIN="$SCRIPT_DIR/test_exec"
 
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
-YELLOW=$'\033[0;33m'
 RST=$'\033[0m'
 
 pass=0
@@ -144,6 +143,19 @@ if grep -q '^OVR=new$' <<<"$out" && ! grep -q '^OVR=old$' <<<"$out"; then
     report_pass "set-rule overrides existing var"
 else
     report_fail "overwrite" "rule did not override existing value" "$out"
+fi
+
+echo ""
+echo "=== host environ strip (constructor, no exec) ==="
+# The constructor must remove unset-rule vars from the host's OWN environ, so
+# paths that copy environ verbatim (KIO -> systemd StartTransientUnit) cannot
+# leak them. hostenv prints the host environ without exec'ing — a direct check
+# of the constructor, not of any exec hook.
+out=$(run_capture hostenv "HOSTSTRIP,LD_PRELOAD,CHILD_ENV_RULES" HOSTSTRIP=leaked)
+if grep -qE '^(HOSTSTRIP|LD_PRELOAD|CHILD_ENV_RULES)=' <<<"$out"; then
+    report_fail "host-strip" "unset-rule var survived in host environ" "$out"
+else
+    report_pass "host environ stripped by constructor"
 fi
 
 echo ""

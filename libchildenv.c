@@ -3,8 +3,10 @@
 //
 // Rule syntax (comma-separated): "VAR" unsets, "VAR=value" sets/overwrites.
 //
-// Hooks every exec*/posix_spawn entry point so spawn paths used by Qt6,
-// GLib, Python, Go, systemd, etc. are all covered. A library constructor
+// Hooks every libc exec*/posix_spawn entry point so spawn paths used by Qt6,
+// GLib, Python, systemd, etc. are covered. Runtimes that issue the
+// execve/execveat syscall directly (Go os/exec, static musl binaries) bypass
+// these PLT hooks and are NOT intercepted. A library constructor
 // also strips unset rules from the host's own environ — without this,
 // callers like KIO/KProcessRunner copy environ verbatim into D-Bus
 // StartTransientUnit calls, leaking LD_PRELOAD past every exec hook.
@@ -145,10 +147,6 @@ static void strip_host_environ(void) {
 
 // ---------- exec/spawn hooks ----------
 
-#define WRAP_RET(call) do { \
-    int saved = errno; free_envp(new_envp); errno = saved; return (call); \
-} while (0)
-
 int execve(const char *path, char *const argv[], char *const envp[]) {
     static int (*real)(const char *, char *const *, char *const *);
     if (!real) real = dlsym(RTLD_NEXT, "execve");
@@ -244,8 +242,8 @@ int execle(const char *path, const char *arg, ...) {
 }
 
 // posix_spawn family: required for Qt6 QProcess, GLib g_spawn_async,
-// Python subprocess, Go os/exec — they bypass exec* entirely. Returns an
-// errno value directly (not -1/errno).
+// Python subprocess — they bypass exec* entirely. Returns an errno value
+// directly (not -1/errno).
 int posix_spawn(pid_t *pid, const char *path,
                 const posix_spawn_file_actions_t *fa,
                 const posix_spawnattr_t *attr,

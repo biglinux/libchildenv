@@ -147,15 +147,30 @@ fi
 
 echo ""
 echo "=== host environ strip (constructor, no exec) ==="
-# The constructor must remove unset-rule vars from the host's OWN environ, so
-# paths that copy environ verbatim (KIO -> systemd StartTransientUnit) cannot
-# leak them. hostenv prints the host environ without exec'ing — a direct check
-# of the constructor, not of any exec hook.
-out=$(run_capture hostenv "HOSTSTRIP,LD_PRELOAD,CHILD_ENV_RULES" HOSTSTRIP=leaked)
-if grep -qE '^(HOSTSTRIP|LD_PRELOAD|CHILD_ENV_RULES)=' <<<"$out"; then
-    report_fail "host-strip" "unset-rule var survived in host environ" "$out"
+# The constructor must remove ONLY LD_PRELOAD + CHILD_ENV_RULES from the host's
+# OWN environ (the two whose environ-copy leak — KIO -> StartTransientUnit — is
+# harmful). Every other unset-rule var must STAY on the host: the host needs it
+# (e.g. QT_QUICK_BACKEND=software on a daemon, MALLOC_CONF on a GTK app, read in
+# main() after the constructor); stripping it would silently defeat the host's
+# own setting. hostenv prints the host environ without exec'ing.
+out=$(run_capture hostenv "HOSTKEEP,LD_PRELOAD,CHILD_ENV_RULES" HOSTKEEP=kept)
+if grep -qE '^(LD_PRELOAD|CHILD_ENV_RULES)=' <<<"$out"; then
+    report_fail "host-strip" "LD_PRELOAD/CHILD_ENV_RULES survived in host environ" "$out"
+elif ! grep -q '^HOSTKEEP=kept$' <<<"$out"; then
+    report_fail "host-keep" "non-critical unset-rule var wrongly stripped from host" "$out"
 else
-    report_pass "host environ stripped by constructor"
+    report_pass "host keeps own vars, drops only LD_PRELOAD+CHILD_ENV_RULES"
+fi
+
+# Same var (HOSTKEEP) must still be stripped from CHILDREN — host-keep must not
+# weaken child isolation. The child (env via execve) must not see it.
+out=$(run_capture execve "HOSTKEEP,LD_PRELOAD,CHILD_ENV_RULES" HOSTKEEP=should_not_leak)
+if grep -q '^EXEC_FAILED' <<<"$out"; then
+    report_fail "host-keep-child" "exec failed" "$out"
+elif grep -q '^HOSTKEEP=' <<<"$out"; then
+    report_fail "host-keep-child" "var kept on host leaked into child" "$out"
+else
+    report_pass "host-kept var still stripped from child"
 fi
 
 echo ""

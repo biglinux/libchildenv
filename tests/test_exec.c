@@ -93,9 +93,10 @@ static int run_fexecve(void) {
 }
 
 // Print the host's OWN environ without exec'ing. Lets the harness verify the
-// library constructor stripped unset-rule vars from the host process itself
-// (the mechanism that blocks leakage via environ-copying paths such as
-// KIO/KProcessRunner -> systemd StartTransientUnit), independent of any hook.
+// constructor removed exactly LD_PRELOAD + CHILD_ENV_RULES from the host (the
+// environ-copy leak vectors: KIO/KProcessRunner -> systemd StartTransientUnit)
+// while KEEPING every other unset-rule var the host itself needs — independent
+// of any exec hook.
 static int run_hostenv(void) {
     for (char **e = environ; *e; ++e) puts(*e);
     return 0;

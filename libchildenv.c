@@ -6,10 +6,12 @@
 // Hooks every libc exec*/posix_spawn entry point so spawn paths used by Qt6,
 // GLib, Python, systemd, etc. are covered. Runtimes that issue the
 // execve/execveat syscall directly (Go os/exec, static musl binaries) bypass
-// these PLT hooks and are NOT intercepted. A library constructor
-// also strips unset rules from the host's own environ — without this,
+// these PLT hooks and are NOT intercepted. A library constructor also removes
+// LD_PRELOAD and CHILD_ENV_RULES from the host's own environ — without this,
 // callers like KIO/KProcessRunner copy environ verbatim into D-Bus
-// StartTransientUnit calls, leaking LD_PRELOAD past every exec hook.
+// StartTransientUnit calls, leaking those two past every exec hook. Other
+// unset-rule vars stay in the host environ (the host needs them; only the
+// children must be cleaned — see strip_host_environ).
 //
 // By the time the constructor runs, ld.so has already dlopen'd every
 // LD_PRELOAD entry, so removing the variable from environ does not
@@ -122,14 +124,25 @@ oom:
 
 // ---------- host-process strip (constructor) ----------
 
-// Strip unset rules ("VAR") from our own environ. "VAR=value" rules are
-// child-only — applying them to the host could clobber state callers rely on.
+// Remove LD_PRELOAD and CHILD_ENV_RULES from our OWN environ. These two are the
+// only vars whose host-leak is actually harmful: callers that copy environ
+// verbatim into a child without going through the exec hooks (KIO::KProcessRunner
+// → systemd StartTransientUnit) would otherwise propagate LD_PRELOAD (child
+// loads our libs) and CHILD_ENV_RULES (child re-applies rules).
 //
-// Caches CHILD_ENV_RULES into `cached_rules` before stripping, so hooks keep
-// working after the variable leaves the environ. CHILD_ENV_RULES itself is
-// stripped too — otherwise it leaks to children spawned via paths that
-// bypass exec hooks (KIO::KProcessRunner → systemd StartTransientUnit, which
-// copies the host's environ verbatim into the new scope unit).
+// Every OTHER unset rule ("VAR") is deliberately LEFT in the host environ. The
+// host frequently needs the var itself even though children must not inherit it
+// — e.g. a daemon setting QT_QUICK_BACKEND=software to skip the GL stack, or a
+// GTK app setting MALLOC_CONF for its allocator. Those are read in the host's
+// main()/QGuiApplication, AFTER this constructor runs, so stripping them here
+// would silently defeat the host's own setting. build_child_env() still strips
+// every ruled var from spawned children, so child isolation is unchanged; the
+// only residual is that such a var could leak via the environ-copy path above,
+// which is harmless (the child has no LD_PRELOAD, so allocator/render vars are
+// inert there).
+//
+// Caches CHILD_ENV_RULES into `cached_rules` before removing it, so the hooks
+// keep working after it leaves the environ.
 __attribute__((constructor))
 static void strip_host_environ(void) {
     char *raw = getenv("CHILD_ENV_RULES");
@@ -140,6 +153,7 @@ static void strip_host_environ(void) {
     char *p = s, *tok;
     while ((tok = strsep(&p, ",")) != NULL) {
         if (!*tok || *tok == '=' || strchr(tok, '=')) continue;
+        if (strcmp(tok, "LD_PRELOAD") && strcmp(tok, "CHILD_ENV_RULES")) continue;
         unsetenv(tok);
     }
     free(s);
